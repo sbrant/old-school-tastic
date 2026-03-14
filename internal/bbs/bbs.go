@@ -50,11 +50,11 @@ func (b *BBS) addLog(from uint32, fromName, cmd, response string) {
 	}
 }
 
-// Handle processes an incoming text message and returns a response (or empty string for no response)
-func (b *BBS) Handle(fromNode uint32, text string) string {
+// Handle processes an incoming text message and returns responses.
+func (b *BBS) Handle(fromNode uint32, text string) []string {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return ""
+		return nil
 	}
 
 	fromName := b.db.GetNodeName(fromNode)
@@ -66,29 +66,47 @@ func (b *BBS) Handle(fromNode uint32, text string) string {
 	cmd := strings.ToLower(parts[0])
 	args := parts[1:]
 
-	var response string
+	var responses []string
 
 	switch cmd {
 	case "help", "?":
-		response = b.cmdHelp()
+		responses = []string{b.cmdHelp()}
 	case "ping":
-		response = "pong"
+		responses = []string{"pong"}
 	case "time":
-		response = time.Now().Format("2006-01-02 15:04:05 MST")
+		responses = []string{time.Now().Format("2006-01-02 15:04:05 MST")}
 	case "uptime":
-		response = b.cmdUptime()
+		responses = []string{b.cmdUptime()}
 	case "nodes":
-		response = b.cmdNodes()
+		responses = []string{b.cmdNodes()}
 	case "info":
-		response = b.cmdInfo(fromNode)
+		responses = []string{b.cmdInfo(fromNode)}
 	case "mail":
-		response = b.cmdMail(fromNode, args)
+		responses = []string{b.cmdMail(fromNode, args)}
+	case "files":
+		if len(args) >= 2 && strings.ToLower(args[0]) == "get" {
+			chunks, err := b.FilesGet(args[1])
+			if err != nil {
+				responses = []string{err.Error()}
+			} else {
+				responses = chunks
+			}
+		} else {
+			responses = []string{b.cmdFiles(args)}
+		}
 	default:
-		response = fmt.Sprintf("Unknown cmd: %s. Send 'help' for commands.", cmd)
+		responses = []string{fmt.Sprintf("Unknown cmd: %s. Send 'help' for commands.", cmd)}
 	}
 
-	b.addLog(fromNode, fromName, text, response)
-	return response
+	logResp := ""
+	if len(responses) == 1 {
+		logResp = responses[0]
+	} else if len(responses) > 1 {
+		logResp = fmt.Sprintf("(%d chunks)", len(responses))
+	}
+	b.addLog(fromNode, fromName, text, logResp)
+
+	return responses
 }
 
 func (b *BBS) cmdHelp() string {
@@ -101,7 +119,9 @@ func (b *BBS) cmdHelp() string {
 		"info     - your node info\n" +
 		"mail read    - read your mail\n" +
 		"mail send <name> <msg>\n" +
-		"mail list    - mailbox status"
+		"mail list    - mailbox status\n" +
+		"files list   - list files\n" +
+		"files get <name> - download"
 }
 
 func (b *BBS) cmdUptime() string {

@@ -92,6 +92,18 @@ Start with `--bbs` to enable. The BBS responds to direct messages on encrypted c
 | `mail read` | Read your messages |
 | `mail send <name> <msg>` | Leave a message for a node |
 | `mail list` | Mailbox stats |
+| `files list` | List available files |
+| `files get <name>` | Download a file |
+
+### File Serving
+
+Place files in `~/.config/meshtastic-cli/bbs-files/` to make them available.
+
+- **Text files** (`.txt`, `.md`) are sent as plain text chunks — readable without a client
+- **Binary files** are sent as base64-encoded chunks with `FILE:` protocol headers
+- The built-in file client automatically reassembles incoming binary file chunks
+- Received files are saved to `~/.config/meshtastic-cli/received-files/`
+- Max file size: 50KB
 
 ## Architecture
 

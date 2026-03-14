@@ -80,12 +80,13 @@ type Model struct {
 	typing      bool // true when text input has focus
 	showDetail  bool // node detail overlay
 
-	conn     *serialpkg.Conn
-	db       *store.DB
-	channels []string // channel names by index
-	opts     Options
-	pcap     *pcap.Writer
-	bbs      *bbs.BBS
+	conn       *serialpkg.Conn
+	db         *store.DB
+	channels   []string // channel names by index
+	opts       Options
+	pcap       *pcap.Writer
+	bbs        *bbs.BBS
+	fileClient *bbs.FileClient
 
 	packets *packetsTab
 	nodes   *nodesTab
@@ -110,14 +111,17 @@ func NewModel(conn *serialpkg.Conn, db *store.DB, opts Options) Model {
 		bbsEngine = bbs.New(db)
 	}
 
+	fileClient := bbs.NewFileClient(bbs.DefaultSaveDir())
+
 	return Model{
-		activeTab: tabPackets,
-		conn:      conn,
-		db:        db,
-		channels:  make([]string, 8),
-		opts:      opts,
-		pcap:      pw,
-		bbs:       bbsEngine,
+		activeTab:  tabPackets,
+		conn:       conn,
+		db:         db,
+		channels:   make([]string, 8),
+		opts:       opts,
+		pcap:       pw,
+		bbs:        bbsEngine,
+		fileClient: fileClient,
 		packets:   newPacketsTab(),
 		nodes:     newNodesTab(),
 		chat:      newChatTab(),
@@ -394,7 +398,6 @@ func (m *Model) sendMessage(text string, to uint32, channel uint32) {
 		return
 	}
 
-	// Store outgoing message in DB
 	now := time.Now().UnixMilli()
 	m.db.InsertMessage(store.Message{
 		PacketID:  0,
@@ -405,6 +408,15 @@ func (m *Model) sendMessage(text string, to uint32, channel uint32) {
 		Timestamp: now,
 		Status:    "pending",
 	})
+}
+
+func (m *Model) sendChunked(msgs []string, to uint32, channel uint32) {
+	for i, msg := range msgs {
+		m.sendMessage(msg, to, channel)
+		if i < len(msgs)-1 {
+			time.Sleep(2 * time.Second) // LoRa duty cycle spacing
+		}
+	}
 }
 
 func (m *Model) moveCursor(delta int) {
@@ -609,11 +621,17 @@ func (m *Model) processPacket(pkt *proto.Packet) {
 				HopLimit:  nullInt64(int64(mp.GetHopLimit())),
 				Status:    "received",
 			})
+			// File client — intercept incoming file chunks
+			if m.fileClient != nil {
+				m.fileClient.HandleMessage(mp.GetFrom(), payload)
+				m.fileClient.CleanStale()
+			}
 			// BBS auto-reply — only on encrypted channels (not ch 0), not broadcast
 			if m.bbs != nil && m.myNodeNum != 0 && mp.GetFrom() != m.myNodeNum &&
 				mp.GetChannel() != 0 && mp.GetTo() != 0xFFFFFFFF {
-				if reply := m.bbs.Handle(mp.GetFrom(), payload); reply != "" {
-					m.sendMessage(reply, mp.GetFrom(), mp.GetChannel())
+				replies := m.bbs.Handle(mp.GetFrom(), payload)
+				if len(replies) > 0 {
+					go m.sendChunked(replies, mp.GetFrom(), mp.GetChannel())
 				}
 			} else if m.opts.Bot && m.myNodeNum != 0 && mp.GetFrom() != m.myNodeNum {
 				// Simple bot mode (legacy)
