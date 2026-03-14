@@ -1,0 +1,8 @@
+meshtastic-cli
+meshtastic-cli-linux-*
+meshtastic-cli-darwin-*
+*.db
+*.db-wal
+*.db-shm
+*.log
+*.pcap
