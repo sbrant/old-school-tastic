@@ -31,7 +31,7 @@ type chatTab struct {
 
 func newChatTab() *chatTab {
 	ti := textinput.New()
-	ti.Placeholder = "Type a message..."
+	ti.Placeholder = "Message... (/dm <name> <msg> for DM)"
 	ti.CharLimit = 228
 	ti.Width = 60
 	ti.Prompt = "» "

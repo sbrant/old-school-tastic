@@ -403,8 +403,18 @@ func (m *Model) handleTyping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			text := m.chat.input.Value()
 			if text != "" && m.myNodeNum != 0 {
 				isDM, chIdx, dmNode := m.chat.selectedChannel()
-				if isDM {
-					m.sendMessage(text, dmNode, 0)
+
+				// Handle /dm <name> <message> command
+				if strings.HasPrefix(text, "/dm ") {
+					parts := strings.SplitN(text[4:], " ", 2)
+					if len(parts) == 2 {
+						targetNode := m.findNodeByName(strings.TrimSpace(parts[0]))
+						if targetNode != 0 {
+							m.sendMessage(parts[1], targetNode, uint32(chIdx))
+						}
+					}
+				} else if isDM {
+					m.sendMessage(text, dmNode, uint32(chIdx))
 				} else {
 					m.sendMessage(text, 0xFFFFFFFF, uint32(chIdx))
 				}
@@ -465,6 +475,23 @@ func (m *Model) requestConfig() {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}()
+}
+
+func (m *Model) findNodeByName(name string) uint32 {
+	name = strings.ToLower(name)
+	nodes, err := m.db.GetAllNodes()
+	if err != nil {
+		return 0
+	}
+	for _, n := range nodes {
+		if n.ShortName.Valid && strings.ToLower(n.ShortName.String) == name {
+			return uint32(n.Num)
+		}
+		if n.LongName.Valid && strings.Contains(strings.ToLower(n.LongName.String), name) {
+			return uint32(n.Num)
+		}
+	}
+	return 0
 }
 
 func (m *Model) sendMessage(text string, to uint32, channel uint32) {
