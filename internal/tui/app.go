@@ -198,7 +198,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.packetCount = m.db.GetPacketCount()
 		// Refresh chat/dm if active
 		if m.activeTab == tabChat {
-			m.chat.refresh(m.db)
+			m.chat.refresh(&m)
 		} else if m.activeTab == tabDM && m.dm.mode == dmModeChat {
 			m.dm.refreshMessages(m.db, m.myNodeNum)
 		}
@@ -265,7 +265,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.nodes.refresh(m.db)
 		case "3":
 			m.activeTab = tabChat
-			m.chat.refresh(m.db)
+			m.chat.refresh(&m)
 		case "4":
 			m.activeTab = tabDM
 			m.dm.refresh(m.db, m.myNodeNum)
@@ -312,9 +312,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.showDetail = true
 				}
 			case tabChat:
-				m.chat.input.Focus()
-				m.typing = true
-				return m, textinput.Blink
+				if !m.chat.focusRight {
+					// Switch focus to chat panel
+					m.chat.focusRight = true
+					m.chat.loadMessages(&m)
+					m.chat.input.Focus()
+					m.typing = true
+					return m, textinput.Blink
+				}
 			case tabDM:
 				if m.dm.mode == dmModeList {
 					if m.dm.cursor < len(m.dm.conversations) {
@@ -377,6 +382,7 @@ func (m *Model) handleTyping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.typing = false
 		m.chat.input.Blur()
+		m.chat.focusRight = false
 		m.dm.input.Blur()
 		if m.activeTab == tabChannels {
 			m.channelsUI.editing = false
@@ -405,9 +411,14 @@ func (m *Model) handleTyping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case tabChat:
 			text := m.chat.input.Value()
 			if text != "" && m.myNodeNum != 0 {
-				m.sendMessage(text, 0xFFFFFFFF, uint32(m.chat.channel))
+				isDM, chIdx, dmNode := m.chat.selectedChannel()
+				if isDM {
+					m.sendMessage(text, dmNode, 0)
+				} else {
+					m.sendMessage(text, 0xFFFFFFFF, uint32(chIdx))
+				}
 				m.chat.input.SetValue("")
-				m.chat.refresh(m.db)
+				m.chat.refresh(m)
 			}
 		case tabDM:
 			text := m.dm.input.Value()
@@ -737,6 +748,18 @@ func (m *Model) moveCursor(delta int) {
 		}
 		if m.nodes.cursor > max {
 			m.nodes.cursor = max
+		}
+	case tabChat:
+		if !m.chat.focusRight {
+			m.chat.cursor += delta
+			max := len(m.chat.entries) - 1
+			if m.chat.cursor < 0 {
+				m.chat.cursor = 0
+			}
+			if m.chat.cursor > max {
+				m.chat.cursor = max
+			}
+			m.chat.loadMessages(m)
 		}
 	case tabConfig:
 		m.config.cursor += delta

@@ -153,7 +153,7 @@ func (t *dmTab) viewChat(m *Model, height int) string {
 
 	var msgLines []string
 	for _, msg := range t.messages {
-		msgLines = append(msgLines, formatChatMessage(msg, m))
+		msgLines = append(msgLines, formatChatMsg(msg, m, m.width))
 	}
 
 	if len(msgLines) > msgHeight {
