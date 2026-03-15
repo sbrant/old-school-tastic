@@ -577,7 +577,7 @@ func (m *Model) channelNextField() {
 func (m *Model) saveChannelEdit() {
 	ch := &m.channelsUI.channels[m.channelsUI.editIdx]
 
-	// Save current field
+	// Save whichever field is currently active
 	switch m.channelsUI.field {
 	case fieldName:
 		ch.name = m.channelsUI.input.Value()
@@ -601,11 +601,16 @@ func (m *Model) saveChannelEdit() {
 		}
 	}
 
-	// Send to device
+	// Force SECONDARY for new channels
+	if m.channelsUI.creating {
+		ch.role = pb.Channel_SECONDARY
+	}
+
+	// Send full channel state to device
 	data, err := buildSetChannel(m.myNodeNum, ch.index, ch.name, ch.psk, ch.role)
 	if err == nil {
 		m.conn.Send(data)
-		m.channelsUI.message = fmt.Sprintf("Channel %d updated", ch.index)
+		m.channelsUI.message = fmt.Sprintf("Channel %d saved as %s", ch.index, ch.role.String())
 	} else {
 		m.channelsUI.message = "Error: " + err.Error()
 	}
@@ -615,10 +620,15 @@ func (m *Model) saveChannelEdit() {
 	m.channelsUI.input.Blur()
 	m.typing = false
 
-	// Also update the local channel names cache
 	if int(ch.index) < len(m.channels) {
 		m.channels[ch.index] = ch.name
 	}
+
+	// Reload channels from device after a short delay
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		m.requestChannels()
+	}()
 }
 
 func (m *Model) disableChannel() {

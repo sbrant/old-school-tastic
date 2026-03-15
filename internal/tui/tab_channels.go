@@ -180,7 +180,7 @@ func (t *channelsTab) viewEdit(m *Model, height int) string {
 	lines = append(lines, "")
 
 	ch := channelInfo{}
-	if !t.creating && t.editIdx < len(t.channels) {
+	if t.editIdx < len(t.channels) {
 		ch = t.channels[t.editIdx]
 	}
 
