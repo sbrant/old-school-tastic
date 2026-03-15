@@ -75,6 +75,10 @@ func (t *channelsTab) addChannel(ch *pb.Channel) {
 	// Update existing or append
 	for i, c := range t.channels {
 		if c.index == info.index {
+			// Preserve local PSK if device returned empty (firmware hides PSK)
+			if len(info.psk) == 0 && len(c.psk) > 0 {
+				info.psk = c.psk
+			}
 			t.channels[i] = info
 			return
 		}
