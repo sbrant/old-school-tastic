@@ -267,7 +267,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "d":
 			if m.activeTab == tabChannels && !m.channelsUI.editing && m.myNodeNum != 0 {
-				m.disableChannel()
+				m.toggleChannel()
 			}
 		case "s":
 			if m.activeTab == tabChannels && !m.channelsUI.editing && !m.channelsUI.sharing {
@@ -648,14 +648,28 @@ func (m *Model) saveChannelEdit() {
 	}
 }
 
-func (m *Model) disableChannel() {
+func (m *Model) toggleChannel() {
 	if m.channelsUI.cursor >= len(m.channelsUI.channels) {
 		return
 	}
-	ch := m.channelsUI.channels[m.channelsUI.cursor]
+	ch := &m.channelsUI.channels[m.channelsUI.cursor]
 	if ch.role == pb.Channel_PRIMARY {
-		m.channelsUI.message = "Cannot disable primary channel"
+		m.channelsUI.message = "Cannot toggle primary channel"
 		return
+	}
+
+	var newRole pb.Channel_Role
+	var name string
+	var psk []byte
+	if ch.role == pb.Channel_DISABLED {
+		newRole = pb.Channel_SECONDARY
+		name = ch.name
+		psk = ch.psk
+		if len(psk) == 0 {
+			psk = generatePSK()
+		}
+	} else {
+		newRole = pb.Channel_DISABLED
 	}
 
 	go func() {
@@ -663,7 +677,7 @@ func (m *Model) disableChannel() {
 		m.conn.Send(beginData)
 		time.Sleep(200 * time.Millisecond)
 
-		setData, _ := buildSetChannel(m.myNodeNum, ch.index, "", nil, pb.Channel_DISABLED)
+		setData, _ := buildSetChannel(m.myNodeNum, ch.index, name, psk, newRole)
 		m.conn.Send(setData)
 		time.Sleep(200 * time.Millisecond)
 
@@ -673,8 +687,8 @@ func (m *Model) disableChannel() {
 		m.requestChannels()
 	}()
 
-	m.channelsUI.channels[m.channelsUI.cursor].role = pb.Channel_DISABLED
-	m.channelsUI.message = fmt.Sprintf("Channel %d disabled", ch.index)
+	ch.role = newRole
+	m.channelsUI.message = fmt.Sprintf("Channel %d → %s", ch.index, newRole.String())
 }
 
 func (m *Model) moveCursor(delta int) {

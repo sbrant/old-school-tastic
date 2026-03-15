@@ -106,7 +106,7 @@ func (t *channelsTab) view(m *Model, height int) string {
 	if t.message != "" {
 		statusLine = lipgloss.NewStyle().Foreground(ColorGreen).Render("  " + t.message)
 	} else {
-		statusLine = lipgloss.NewStyle().Foreground(ColorDim).Render("  Enter:edit  n:new  s:share  r:reload  d:disable")
+		statusLine = lipgloss.NewStyle().Foreground(ColorDim).Render("  Enter:edit  n:new  s:share  d:toggle  r:reload")
 	}
 
 	var lines []string
