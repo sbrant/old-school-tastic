@@ -6,9 +6,17 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+var StatusReconnecting = lipgloss.NewStyle().
+	Foreground(ColorYellow).
+	Bold(true)
+
 func renderStatusBar(m *Model) string {
-	status := StatusConnected.Render("● CONNECTED")
-	if !m.connected {
+	var status string
+	if m.reconnecting {
+		status = StatusReconnecting.Render("◌ RECONNECTING")
+	} else if m.connected {
+		status = StatusConnected.Render("● CONNECTED")
+	} else {
 		status = StatusDisconnected.Render("○ CONNECTING")
 	}
 

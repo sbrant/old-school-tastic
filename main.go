@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
+	"log"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -39,6 +41,9 @@ Options:
 		fmt.Fprintf(os.Stderr, "\nExample: %s /dev/ttyUSB0\n", os.Args[0])
 	}
 	flag.Parse()
+
+	// Suppress Go's default logger from writing to stderr (breaks TUI)
+	log.SetOutput(io.Discard)
 
 	// Initialize logger
 	logger.Init(*enableLogging)

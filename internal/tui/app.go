@@ -39,6 +39,8 @@ type PacketMsg struct {
 	Packet *proto.Packet
 }
 
+type SerialStatusMsg serialpkg.ConnStatus
+
 type TickMsg time.Time
 
 func waitForPacket(ch <-chan []byte) tea.Cmd {
@@ -52,6 +54,16 @@ func waitForPacket(ch <-chan []byte) tea.Cmd {
 			return nil
 		}
 		return PacketMsg{Packet: pkt}
+	}
+}
+
+func waitForSerialStatus(ch <-chan serialpkg.ConnStatus) tea.Cmd {
+	return func() tea.Msg {
+		s, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return SerialStatusMsg(s)
 	}
 }
 
@@ -74,9 +86,10 @@ type Model struct {
 	activeTab   tab
 	width       int
 	height      int
-	showHelp    bool
-	connected   bool
-	myNodeNum   uint32
+	showHelp     bool
+	connected    bool
+	reconnecting bool
+	myNodeNum    uint32
 	nodeCount   int
 	packetCount int
 	typing      bool // true when text input has focus
@@ -140,9 +153,9 @@ type configRequestedMsg struct{}
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		waitForPacket(m.conn.Packets),
+		waitForSerialStatus(m.conn.Status),
 		tickCmd(),
 		tea.EnterAltScreen,
-		// Delay config request so the packet consumer is running first
 		tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
 			return configRequestedMsg{}
 		}),
@@ -161,6 +174,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case configRequestedMsg:
 		m.conn.RequestConfig()
 		return m, nil
+
+	case SerialStatusMsg:
+		switch serialpkg.ConnStatus(msg) {
+		case serialpkg.StatusConnected:
+			m.connected = true
+			m.reconnecting = false
+		case serialpkg.StatusReconnecting:
+			m.connected = false
+			m.reconnecting = true
+		case serialpkg.StatusDisconnected:
+			m.connected = false
+			m.reconnecting = false
+		}
+		return m, waitForSerialStatus(m.conn.Status)
 
 	case TickMsg:
 		nodes, err := m.db.GetAllNodes()

@@ -2,17 +2,25 @@ package serial
 
 import (
 	"fmt"
-	"log"
 	"math/rand"
 	"time"
 
 	"go.bug.st/serial"
+	"meshtastic-cli/internal/logger"
 	"meshtastic-cli/internal/proto"
 )
 
 const defaultBaud = 115200
 
 const specialNonceOnlyConfig = 69420
+
+type ConnStatus int
+
+const (
+	StatusConnected ConnStatus = iota
+	StatusDisconnected
+	StatusReconnecting
+)
 
 type Conn struct {
 	port      serial.Port
@@ -21,6 +29,7 @@ type Conn struct {
 	skipNodes bool
 	framer    Framer
 	Packets   chan []byte
+	Status    chan ConnStatus
 	done      chan struct{}
 }
 
@@ -40,28 +49,22 @@ func Open(path string, baud int, skipNodes bool) (*Conn, error) {
 		baud:      baud,
 		skipNodes: skipNodes,
 		Packets:   make(chan []byte, 512),
+		Status:    make(chan ConnStatus, 16),
 		done:      make(chan struct{}),
 	}
 
 	go c.readLoop()
-
-	// Request config immediately — packets will buffer in the channel
-	// until the TUI starts consuming them
 	c.requestConfig()
 
 	return c, nil
 }
 
-// RequestConfig sends a want_config_id to the device. Call this after
-// the consumer is ready to read from the Packets channel.
 func (c *Conn) RequestConfig() {
 	c.requestConfig()
 }
 
 func (c *Conn) requestConfig() {
 	go func() {
-		// Send START bytes to wake serial API, then config request
-		// Some devices need a nudge before they'll respond
 		c.port.Write([]byte{start1, start2, 0x00, 0x00})
 		time.Sleep(100 * time.Millisecond)
 
@@ -71,14 +74,11 @@ func (c *Conn) requestConfig() {
 		}
 		data, err := proto.EncodeWantConfig(nonce)
 		if err != nil {
-			log.Printf("warning: failed to encode config request: %v", err)
+			logger.Error("Serial", fmt.Sprintf("failed to encode config request: %v", err))
 			return
 		}
-		if err := c.Send(data); err != nil {
-			log.Printf("warning: config request failed: %v", err)
-		}
+		c.Send(data)
 
-		// Send again after a delay in case the first was missed
 		time.Sleep(1 * time.Second)
 		c.Send(data)
 	}()
@@ -97,11 +97,14 @@ func (c *Conn) readLoop() {
 			default:
 			}
 
-			// Try to reconnect
-			log.Printf("serial read error: %v, reconnecting...", err)
+			logger.Warn("Serial", fmt.Sprintf("read error: %v, reconnecting...", err))
+			c.emitStatus(StatusReconnecting)
+
 			if c.reconnect() {
+				c.emitStatus(StatusConnected)
 				continue
 			}
+			c.emitStatus(StatusDisconnected)
 			return
 		}
 
@@ -133,21 +136,27 @@ func (c *Conn) reconnect() bool {
 
 		port, err := serial.Open(c.path, &serial.Mode{BaudRate: c.baud})
 		if err != nil {
-			log.Printf("reconnect attempt %d failed: %v", attempt+1, err)
+			logger.Info("Serial", fmt.Sprintf("reconnect attempt %d failed: %v", attempt+1, err))
 			continue
 		}
 
 		c.port = port
-		c.framer = Framer{} // reset parser state
-		log.Printf("reconnected to %s", c.path)
+		c.framer = Framer{}
+		logger.Info("Serial", fmt.Sprintf("reconnected to %s", c.path))
 
-		// Re-request config after reconnect
 		c.requestConfig()
 		return true
 	}
 
-	log.Printf("gave up reconnecting after 30 attempts")
+	logger.Error("Serial", "gave up reconnecting after 30 attempts")
 	return false
+}
+
+func (c *Conn) emitStatus(s ConnStatus) {
+	select {
+	case c.Status <- s:
+	default:
+	}
 }
 
 func (c *Conn) Send(payload []byte) error {
