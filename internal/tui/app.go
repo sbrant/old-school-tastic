@@ -378,33 +378,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleTyping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	key := msg.String()
+
+	// Channel editor intercepts keys before textinput
+	if m.activeTab == tabChannels && m.channelsUI.editing {
+		switch key {
+		case "esc":
+			m.typing = false
+			m.channelsUI.editing = false
+			m.channelsUI.creating = false
+			m.channelsUI.input.Blur()
+			return m, nil
+		case "tab", "ctrl+n", "down":
+			m.channelNextField()
+			return m, nil
+		case "shift+tab", "up":
+			m.channelPrevField()
+			return m, nil
+		case "enter":
+			m.saveChannelEdit()
+			return m, nil
+		case "ctrl+g":
+			if m.channelsUI.field == fieldPSK {
+				psk := generatePSK()
+				m.channelsUI.input.SetValue(hex.EncodeToString(psk))
+			}
+			return m, nil
+		default:
+			// Forward to text input for typing
+			m.channelsUI.input, _ = m.channelsUI.input.Update(msg)
+			return m, nil
+		}
+	}
+
+	// Chat/DM typing
+	switch key {
 	case "esc":
 		m.typing = false
 		m.chat.input.Blur()
 		m.chat.focusRight = false
 		m.dm.input.Blur()
-		if m.activeTab == tabChannels {
-			m.channelsUI.editing = false
-			m.channelsUI.creating = false
-			m.channelsUI.input.Blur()
-		}
 		return m, nil
-
-	case "tab":
-		// Cycle fields in channel editor
-		if m.activeTab == tabChannels && m.channelsUI.editing {
-			m.channelNextField()
-			return m, nil
-		}
-
-	case "g":
-		// Generate random PSK in channel editor
-		if m.activeTab == tabChannels && m.channelsUI.editing && m.channelsUI.field == fieldPSK {
-			psk := generatePSK()
-			m.channelsUI.input.SetValue(hex.EncodeToString(psk))
-			return m, nil
-		}
 
 	case "enter":
 		switch m.activeTab {
@@ -427,11 +441,6 @@ func (m *Model) handleTyping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.dm.input.SetValue("")
 				m.dm.refreshMessages(m.db, m.myNodeNum)
 			}
-		case tabChannels:
-			if m.channelsUI.editing {
-				m.saveChannelEdit()
-				return m, nil
-			}
 		}
 		return m, nil
 	}
@@ -443,8 +452,6 @@ func (m *Model) handleTyping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.chat.input, cmd = m.chat.input.Update(msg)
 	case tabDM:
 		m.dm.input, cmd = m.dm.input.Update(msg)
-	case tabChannels:
-		m.channelsUI.input, cmd = m.channelsUI.input.Update(msg)
 	}
 	return m, cmd
 }
@@ -586,6 +593,32 @@ func (m *Model) startChannelCreate() {
 	m.typing = true
 }
 
+func (m *Model) channelPrevField() {
+	ch := &m.channelsUI.channels[m.channelsUI.editIdx]
+
+	switch m.channelsUI.field {
+	case fieldName:
+		ch.name = m.channelsUI.input.Value()
+		m.channelsUI.field = fieldRole
+		m.channelsUI.input.SetValue(ch.role.String())
+	case fieldPSK:
+		ch.psk = parsePSK(m.channelsUI.input.Value())
+		m.channelsUI.field = fieldName
+		m.channelsUI.input.SetValue(ch.name)
+	case fieldRole:
+		val := strings.ToUpper(m.channelsUI.input.Value())
+		if strings.Contains(val, "SEC") {
+			ch.role = pb.Channel_SECONDARY
+		} else if strings.Contains(val, "PRI") {
+			ch.role = pb.Channel_PRIMARY
+		} else if strings.Contains(val, "DIS") {
+			ch.role = pb.Channel_DISABLED
+		}
+		m.channelsUI.field = fieldPSK
+		m.channelsUI.input.SetValue(pskDisplayStr(ch.psk))
+	}
+}
+
 func (m *Model) channelNextField() {
 	ch := &m.channelsUI.channels[m.channelsUI.editIdx]
 
@@ -596,8 +629,13 @@ func (m *Model) channelNextField() {
 		m.channelsUI.field = fieldPSK
 		m.channelsUI.input.SetValue(pskDisplayStr(ch.psk))
 	case fieldPSK:
-		// Parse PSK from input
-		ch.psk = parsePSK(m.channelsUI.input.Value())
+		raw := m.channelsUI.input.Value()
+		parsed := parsePSK(raw)
+		ch.psk = parsed
+		// Debug: show in ALL possible places
+		debugMsg := fmt.Sprintf("RAW[%d]:%q PSK[%d bytes]", len(raw), raw, len(parsed))
+		m.channelsUI.message = debugMsg
+		logger.Info("ChannelEdit", debugMsg)
 		m.channelsUI.field = fieldRole
 		m.channelsUI.input.SetValue(ch.role.String())
 	case fieldRole:
@@ -639,6 +677,15 @@ func (m *Model) saveChannelEdit() {
 		ch.role = pb.Channel_SECONDARY
 	}
 
+	// Capture values before goroutine (slice might change)
+	chIndex := ch.index
+	chName := ch.name
+	chPsk := make([]byte, len(ch.psk))
+	copy(chPsk, ch.psk)
+	chRole := ch.role
+
+	m.channelsUI.message = fmt.Sprintf("Saving ch%d: name=%q psk=%d bytes role=%s", chIndex, chName, len(chPsk), chRole)
+
 	// Send begin_edit, set_channel, commit_edit sequence
 	go func() {
 		beginData, err := proto.EncodeAdminBeginEdit(m.myNodeNum)
@@ -647,7 +694,7 @@ func (m *Model) saveChannelEdit() {
 		}
 		time.Sleep(200 * time.Millisecond)
 
-		setData, err := buildSetChannel(m.myNodeNum, ch.index, ch.name, ch.psk, ch.role)
+		setData, err := buildSetChannel(m.myNodeNum, chIndex, chName, chPsk, chRole)
 		if err == nil {
 			m.conn.Send(setData)
 		}

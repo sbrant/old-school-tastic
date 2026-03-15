@@ -218,7 +218,7 @@ func (t *channelsTab) viewEdit(m *Model, height int) string {
 	}
 
 	lines = append(lines, "")
-	lines = append(lines, lipgloss.NewStyle().Foreground(ColorDim).Render("  Tab:next field  Enter:save  g:generate random PSK  Esc:cancel"))
+	lines = append(lines, lipgloss.NewStyle().Foreground(ColorDim).Render("  Tab/↓:next  Shift+Tab/↑:prev  Enter:save  Ctrl+G:random PSK  Esc:cancel"))
 
 	return strings.Join(lines, "\n")
 }
