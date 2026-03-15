@@ -615,15 +615,29 @@ func (m *Model) saveChannelEdit() {
 		ch.role = pb.Channel_SECONDARY
 	}
 
-	// Send full channel state to device
-	data, err := buildSetChannel(m.myNodeNum, ch.index, ch.name, ch.psk, ch.role)
-	if err == nil {
-		m.conn.Send(data)
-		m.channelsUI.message = fmt.Sprintf("Channel %d saved as %s", ch.index, ch.role.String())
-	} else {
-		m.channelsUI.message = "Error: " + err.Error()
-	}
+	// Send begin_edit, set_channel, commit_edit sequence
+	go func() {
+		beginData, err := proto.EncodeAdminBeginEdit(m.myNodeNum)
+		if err == nil {
+			m.conn.Send(beginData)
+		}
+		time.Sleep(200 * time.Millisecond)
 
+		setData, err := buildSetChannel(m.myNodeNum, ch.index, ch.name, ch.psk, ch.role)
+		if err == nil {
+			m.conn.Send(setData)
+		}
+		time.Sleep(200 * time.Millisecond)
+
+		commitData, err := proto.EncodeAdminCommitEdit(m.myNodeNum)
+		if err == nil {
+			m.conn.Send(commitData)
+		}
+		time.Sleep(1 * time.Second)
+		m.requestChannels()
+	}()
+
+	m.channelsUI.message = fmt.Sprintf("Channel %d saved as %s", ch.index, ch.role.String())
 	m.channelsUI.editing = false
 	m.channelsUI.creating = false
 	m.channelsUI.input.Blur()
@@ -632,12 +646,6 @@ func (m *Model) saveChannelEdit() {
 	if int(ch.index) < len(m.channels) {
 		m.channels[ch.index] = ch.name
 	}
-
-	// Reload channels from device after a short delay
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		m.requestChannels()
-	}()
 }
 
 func (m *Model) disableChannel() {
@@ -649,12 +657,24 @@ func (m *Model) disableChannel() {
 		m.channelsUI.message = "Cannot disable primary channel"
 		return
 	}
-	data, err := buildSetChannel(m.myNodeNum, ch.index, "", nil, pb.Channel_DISABLED)
-	if err == nil {
-		m.conn.Send(data)
-		m.channelsUI.channels[m.channelsUI.cursor].role = pb.Channel_DISABLED
-		m.channelsUI.message = fmt.Sprintf("Channel %d disabled", ch.index)
-	}
+
+	go func() {
+		beginData, _ := proto.EncodeAdminBeginEdit(m.myNodeNum)
+		m.conn.Send(beginData)
+		time.Sleep(200 * time.Millisecond)
+
+		setData, _ := buildSetChannel(m.myNodeNum, ch.index, "", nil, pb.Channel_DISABLED)
+		m.conn.Send(setData)
+		time.Sleep(200 * time.Millisecond)
+
+		commitData, _ := proto.EncodeAdminCommitEdit(m.myNodeNum)
+		m.conn.Send(commitData)
+		time.Sleep(1 * time.Second)
+		m.requestChannels()
+	}()
+
+	m.channelsUI.channels[m.channelsUI.cursor].role = pb.Channel_DISABLED
+	m.channelsUI.message = fmt.Sprintf("Channel %d disabled", ch.index)
 }
 
 func (m *Model) moveCursor(delta int) {
