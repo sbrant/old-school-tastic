@@ -48,7 +48,7 @@ func newChannelsTab() *channelsTab {
 	ti.Prompt = "» "
 	ti.PromptStyle = lipgloss.NewStyle().Foreground(ColorGreen)
 	ti.TextStyle = lipgloss.NewStyle().Foreground(ColorWhite)
-	return &channelsTab{}
+	return &channelsTab{input: ti}
 }
 
 func (t *channelsTab) addChannel(ch *pb.Channel) {
