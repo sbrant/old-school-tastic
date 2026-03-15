@@ -269,6 +269,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activeTab == tabChannels && !m.channelsUI.editing && m.myNodeNum != 0 {
 				m.disableChannel()
 			}
+		case "s":
+			if m.activeTab == tabChannels && !m.channelsUI.editing && !m.channelsUI.sharing {
+				if m.channelsUI.cursor < len(m.channelsUI.channels) {
+					m.channelsUI.shareText = m.channelsUI.shareChannel(m.channelsUI.cursor, nil)
+					m.channelsUI.sharing = true
+				}
+			}
 
 		// Enter key
 		case "enter":
@@ -309,6 +316,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activeTab == tabDM && m.dm.mode == dmModeChat {
 				m.dm.mode = dmModeList
 				m.dm.refresh(m.db, m.myNodeNum)
+			} else if m.activeTab == tabChannels && m.channelsUI.sharing {
+				m.channelsUI.sharing = false
 			} else if m.activeTab == tabChannels && m.channelsUI.editing {
 				m.channelsUI.editing = false
 				m.channelsUI.creating = false

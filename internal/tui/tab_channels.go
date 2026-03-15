@@ -2,6 +2,7 @@ package tui
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
+	goproto "google.golang.org/protobuf/proto"
 	"meshtastic-cli/internal/proto"
 )
 
@@ -30,15 +32,17 @@ const (
 )
 
 type channelsTab struct {
-	channels []channelInfo
-	cursor   int
-	editing  bool
-	editIdx  int
-	field    channelEditField
-	input    textinput.Model
-	creating bool
-	message  string // status message
-	received int
+	channels  []channelInfo
+	cursor    int
+	editing   bool
+	editIdx   int
+	field     channelEditField
+	input     textinput.Model
+	creating  bool
+	sharing   bool
+	shareText string
+	message   string // status message
+	received  int
 }
 
 func newChannelsTab() *channelsTab {
@@ -83,6 +87,10 @@ func (t *channelsTab) view(m *Model, height int) string {
 		return lipgloss.NewStyle().Foreground(ColorDim).Render("  No channels loaded. Press r to request from device.")
 	}
 
+	if t.sharing {
+		return t.viewShare(m, height)
+	}
+
 	if t.editing {
 		return t.viewEdit(m, height)
 	}
@@ -98,7 +106,7 @@ func (t *channelsTab) view(m *Model, height int) string {
 	if t.message != "" {
 		statusLine = lipgloss.NewStyle().Foreground(ColorGreen).Render("  " + t.message)
 	} else {
-		statusLine = lipgloss.NewStyle().Foreground(ColorDim).Render("  Enter:edit  n:new channel  r:reload  d:disable")
+		statusLine = lipgloss.NewStyle().Foreground(ColorDim).Render("  Enter:edit  n:new  s:share  r:reload  d:disable")
 	}
 
 	var lines []string
@@ -222,6 +230,63 @@ func pskDisplayStr(psk []byte) string {
 		return fmt.Sprintf("simple%d", psk[0])
 	}
 	return hex.EncodeToString(psk)
+}
+
+func (t *channelsTab) viewShare(m *Model, height int) string {
+	var lines []string
+	lines = append(lines, Title.Render("  Share Channel"))
+	lines = append(lines, "")
+
+	for _, line := range strings.Split(t.shareText, "\n") {
+		if strings.HasPrefix(line, "PSK") {
+			label := lipgloss.NewStyle().Foreground(ColorDim).Render("  PSK (hex):  ")
+			val := lipgloss.NewStyle().Foreground(ColorOrange).Bold(true).Render(strings.TrimPrefix(line, "PSK (hex): "))
+			lines = append(lines, label+val)
+		} else if strings.HasPrefix(line, "URL:") {
+			label := lipgloss.NewStyle().Foreground(ColorDim).Render("  URL:        ")
+			val := lipgloss.NewStyle().Foreground(ColorCyan).Render(strings.TrimPrefix(line, "URL: "))
+			lines = append(lines, label+val)
+		} else if strings.HasPrefix(line, "Channel:") {
+			lines = append(lines, lipgloss.NewStyle().Foreground(ColorWhite).Render("  "+line))
+		}
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, lipgloss.NewStyle().Foreground(ColorDim).Render("  Press Esc to go back"))
+
+	return strings.Join(lines, "\n")
+}
+
+func (t *channelsTab) shareChannel(idx int, loraConfig *pb.Config_LoRaConfig) string {
+	if idx >= len(t.channels) {
+		return ""
+	}
+	ch := t.channels[idx]
+
+	pskHex := hex.EncodeToString(ch.psk)
+
+	// Build Meshtastic URL
+	cs := &pb.ChannelSet{
+		Settings: []*pb.ChannelSettings{
+			{
+				Name: ch.name,
+				Psk:  ch.psk,
+			},
+		},
+	}
+	if loraConfig != nil {
+		cs.LoraConfig = loraConfig
+	}
+
+	data, err := goproto.Marshal(cs)
+	if err != nil {
+		return fmt.Sprintf("PSK (hex): %s\nError generating URL: %v", pskHex, err)
+	}
+
+	encoded := base64.RawURLEncoding.EncodeToString(data)
+	url := "https://meshtastic.org/e/#" + encoded
+
+	return fmt.Sprintf("Channel: %s (index %d)\nPSK (hex): %s\nURL: %s", ch.name, ch.index, pskHex, url)
 }
 
 // generatePSK creates a random 32-byte (AES256) key
