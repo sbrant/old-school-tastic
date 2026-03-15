@@ -25,13 +25,12 @@ const (
 	tabPackets tab = iota
 	tabNodes
 	tabChat
-	tabDM
 	tabConfig
 	tabChannels
 	tabBBS
 )
 
-var tabNames = []string{"Packets", "Nodes", "Chat", "DM", "Config", "Channels", "BBS"}
+var tabNames = []string{"Packets", "Nodes", "Chat", "Config", "Channels", "BBS"}
 
 // Messages
 
@@ -106,7 +105,6 @@ type Model struct {
 	packets    *packetsTab
 	nodes      *nodesTab
 	chat       *chatTab
-	dm         *dmTab
 	config     *configTab
 	channelsUI *channelsTab
 	bbsTab     *bbsTab
@@ -141,7 +139,6 @@ func NewModel(conn *serialpkg.Conn, db *store.DB, opts Options) Model {
 		packets:    newPacketsTab(),
 		nodes:      newNodesTab(),
 		chat:       newChatTab(),
-		dm:         newDMTab(),
 		config:     newConfigTab(),
 		channelsUI: newChannelsTab(),
 		bbsTab:     newBBSTab(),
@@ -168,7 +165,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.chat.input.Width = msg.Width - 6
-		m.dm.input.Width = msg.Width - 6
 		return m, nil
 
 	case configRequestedMsg:
@@ -199,8 +195,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Refresh chat/dm if active
 		if m.activeTab == tabChat {
 			m.chat.refresh(&m)
-		} else if m.activeTab == tabDM && m.dm.mode == dmModeChat {
-			m.dm.refreshMessages(m.db, m.myNodeNum)
 		}
 		return m, tickCmd()
 
@@ -228,16 +222,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc", "q":
 				m.showDetail = false
 			case "enter":
-				// Open DM with selected node
+				// Open DM with selected node via Chat tab
 				if m.nodes.cursor < len(m.nodes.nodes) {
-					node := m.nodes.nodes[m.nodes.cursor]
 					m.showDetail = false
-					m.dm.activeNode = uint32(node.Num)
-					m.dm.mode = dmModeChat
-					m.dm.refreshMessages(m.db, m.myNodeNum)
-					m.dm.input.Focus()
+					m.activeTab = tabChat
+					m.chat.refresh(&m)
+					// Find the DM entry for this node
+					node := m.nodes.nodes[m.nodes.cursor]
+					for i, e := range m.chat.entries {
+						if e.isDM && e.dmNode == uint32(node.Num) {
+							m.chat.cursor = i
+							break
+						}
+					}
+					m.chat.focusRight = true
+					m.chat.loadMessages(&m)
+					m.chat.input.Focus()
 					m.typing = true
-					m.activeTab = tabDM
 				}
 			}
 			return m, nil
@@ -267,16 +268,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activeTab = tabChat
 			m.chat.refresh(&m)
 		case "4":
-			m.activeTab = tabDM
-			m.dm.refresh(m.db, m.myNodeNum)
-		case "5":
 			m.activeTab = tabConfig
-		case "6":
+		case "5":
 			m.activeTab = tabChannels
 			if m.myNodeNum != 0 {
 				m.requestChannels()
 			}
-		case "7":
+		case "6":
 			m.activeTab = tabBBS
 
 		// Re-request config
@@ -320,22 +318,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.typing = true
 					return m, textinput.Blink
 				}
-			case tabDM:
-				if m.dm.mode == dmModeList {
-					if m.dm.cursor < len(m.dm.conversations) {
-						c := m.dm.conversations[m.dm.cursor]
-						m.dm.activeNode = c.NodeNum
-						m.dm.mode = dmModeChat
-						m.dm.refreshMessages(m.db, m.myNodeNum)
-						m.dm.input.Focus()
-						m.typing = true
-						return m, textinput.Blink
-					}
-				} else {
-					m.dm.input.Focus()
-					m.typing = true
-					return m, textinput.Blink
-				}
 			case tabChannels:
 				if !m.channelsUI.editing && m.channelsUI.cursor < len(m.channelsUI.channels) {
 					m.startChannelEdit()
@@ -345,10 +327,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Escape
 		case "esc":
-			if m.activeTab == tabDM && m.dm.mode == dmModeChat {
-				m.dm.mode = dmModeList
-				m.dm.refresh(m.db, m.myNodeNum)
-			} else if m.activeTab == tabChannels && m.channelsUI.sharing {
+			if m.activeTab == tabChannels && m.channelsUI.sharing {
 				m.channelsUI.sharing = false
 			} else if m.activeTab == tabChannels && m.channelsUI.editing {
 				m.channelsUI.editing = false
@@ -411,18 +390,16 @@ func (m *Model) handleTyping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Chat/DM typing
+	// Chat typing
 	switch key {
 	case "esc":
 		m.typing = false
 		m.chat.input.Blur()
 		m.chat.focusRight = false
-		m.dm.input.Blur()
 		return m, nil
 
 	case "enter":
-		switch m.activeTab {
-		case tabChat:
+		if m.activeTab == tabChat {
 			text := m.chat.input.Value()
 			if text != "" && m.myNodeNum != 0 {
 				isDM, chIdx, dmNode := m.chat.selectedChannel()
@@ -434,24 +411,14 @@ func (m *Model) handleTyping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.chat.input.SetValue("")
 				m.chat.refresh(m)
 			}
-		case tabDM:
-			text := m.dm.input.Value()
-			if text != "" && m.myNodeNum != 0 && m.dm.activeNode != 0 {
-				m.sendMessage(text, m.dm.activeNode, 0)
-				m.dm.input.SetValue("")
-				m.dm.refreshMessages(m.db, m.myNodeNum)
-			}
 		}
 		return m, nil
 	}
 
-	// Forward to the active text input
+	// Forward to text input
 	var cmd tea.Cmd
-	switch m.activeTab {
-	case tabChat:
+	if m.activeTab == tabChat {
 		m.chat.input, cmd = m.chat.input.Update(msg)
-	case tabDM:
-		m.dm.input, cmd = m.dm.input.Update(msg)
 	}
 	return m, cmd
 }
@@ -814,17 +781,6 @@ func (m *Model) moveCursor(delta int) {
 				m.channelsUI.cursor = max
 			}
 		}
-	case tabDM:
-		if m.dm.mode == dmModeList {
-			m.dm.cursor += delta
-			max := len(m.dm.conversations) - 1
-			if m.dm.cursor < 0 {
-				m.dm.cursor = 0
-			}
-			if m.dm.cursor > max {
-				m.dm.cursor = max
-			}
-		}
 	}
 }
 
@@ -836,10 +792,6 @@ func (m *Model) setCursor(pos int) {
 		m.nodes.cursor = pos
 	case tabConfig:
 		m.config.cursor = pos
-	case tabDM:
-		if m.dm.mode == dmModeList {
-			m.dm.cursor = pos
-		}
 	}
 }
 
@@ -856,10 +808,6 @@ func (m *Model) setCursorEnd() {
 	case tabConfig:
 		if len(m.config.entries) > 0 {
 			m.config.cursor = len(m.config.entries) - 1
-		}
-	case tabDM:
-		if m.dm.mode == dmModeList && len(m.dm.conversations) > 0 {
-			m.dm.cursor = len(m.dm.conversations) - 1
 		}
 	}
 }
@@ -1097,8 +1045,6 @@ func (m Model) View() string {
 		content = m.nodes.view(&m, contentHeight)
 	case tabChat:
 		content = m.chat.view(&m, contentHeight)
-	case tabDM:
-		content = m.dm.view(&m, contentHeight)
 	case tabConfig:
 		content = m.config.view(&m, contentHeight)
 	case tabChannels:

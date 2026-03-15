@@ -11,9 +11,9 @@ Cyberpunk-themed, keyboard-driven, single binary, zero runtime dependencies.
 
 - **Packet viewer** — live scrolling list of all mesh traffic with color-coded port types
 - **Node list** — discovered nodes with SNR, battery, channel utilization, last heard
-- **Chat** — send and receive broadcast messages
-- **Direct messages** — DM conversations with individual nodes
+- **Chat** — unified split-pane view with channel list + DM conversations on the left, messages on the right
 - **Device config** — view device, LoRa, bluetooth, security, module configs
+- **Channel management** — create, edit, enable/disable channels, share PSK and Meshtastic URLs
 - **BBS mode** — auto-responding bulletin board with mailbox system
 - **Serial reconnection** — automatic reconnect with backoff on device disconnect
 - **SQLite persistence** — packets, nodes, messages, and mail survive restarts
@@ -67,7 +67,7 @@ go build -o meshtastic-cli .
 
 | Key | Action |
 |-----|--------|
-| `1`-`6` | Switch tabs (Packets, Nodes, Chat, DM, Config, BBS) |
+| `1`-`6` | Switch tabs (Packets, Nodes, Chat, Config, Channels, BBS) |
 | `j`/`k` | Move down/up |
 | `g`/`G` | Go to top/bottom |
 | `Ctrl+D`/`Ctrl+U` | Page down/up |
