@@ -2,6 +2,7 @@ package tui
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -26,10 +27,11 @@ const (
 	tabChat
 	tabDM
 	tabConfig
+	tabChannels
 	tabBBS
 )
 
-var tabNames = []string{"Packets", "Nodes", "Chat", "DM", "Config", "BBS"}
+var tabNames = []string{"Packets", "Nodes", "Chat", "DM", "Config", "Channels", "BBS"}
 
 // Messages
 
@@ -88,12 +90,13 @@ type Model struct {
 	bbs        *bbs.BBS
 	fileClient *bbs.FileClient
 
-	packets *packetsTab
-	nodes   *nodesTab
-	chat    *chatTab
-	dm      *dmTab
-	config  *configTab
-	bbsTab  *bbsTab
+	packets    *packetsTab
+	nodes      *nodesTab
+	chat       *chatTab
+	dm         *dmTab
+	config     *configTab
+	channelsUI *channelsTab
+	bbsTab     *bbsTab
 }
 
 func NewModel(conn *serialpkg.Conn, db *store.DB, opts Options) Model {
@@ -122,12 +125,13 @@ func NewModel(conn *serialpkg.Conn, db *store.DB, opts Options) Model {
 		pcap:       pw,
 		bbs:        bbsEngine,
 		fileClient: fileClient,
-		packets:   newPacketsTab(),
-		nodes:     newNodesTab(),
-		chat:      newChatTab(),
-		dm:        newDMTab(),
-		config:    newConfigTab(),
-		bbsTab:    newBBSTab(),
+		packets:    newPacketsTab(),
+		nodes:      newNodesTab(),
+		chat:       newChatTab(),
+		dm:         newDMTab(),
+		config:     newConfigTab(),
+		channelsUI: newChannelsTab(),
+		bbsTab:     newBBSTab(),
 	}
 }
 
@@ -241,12 +245,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "5":
 			m.activeTab = tabConfig
 		case "6":
+			m.activeTab = tabChannels
+			if m.myNodeNum != 0 {
+				m.requestChannels()
+			}
+		case "7":
 			m.activeTab = tabBBS
 
 		// Re-request config
 		case "r":
 			if m.activeTab == tabConfig {
 				m.requestConfig()
+			} else if m.activeTab == tabChannels {
+				m.requestChannels()
+			}
+
+		// Channel-specific keys
+		case "n":
+			if m.activeTab == tabChannels && !m.channelsUI.editing && m.myNodeNum != 0 {
+				m.startChannelCreate()
+			}
+		case "d":
+			if m.activeTab == tabChannels && !m.channelsUI.editing && m.myNodeNum != 0 {
+				m.disableChannel()
 			}
 
 		// Enter key
@@ -276,6 +297,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.typing = true
 					return m, textinput.Blink
 				}
+			case tabChannels:
+				if !m.channelsUI.editing && m.channelsUI.cursor < len(m.channelsUI.channels) {
+					m.startChannelEdit()
+					return m, textinput.Blink
+				}
 			}
 
 		// Escape
@@ -283,6 +309,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activeTab == tabDM && m.dm.mode == dmModeChat {
 				m.dm.mode = dmModeList
 				m.dm.refresh(m.db, m.myNodeNum)
+			} else if m.activeTab == tabChannels && m.channelsUI.editing {
+				m.channelsUI.editing = false
+				m.channelsUI.creating = false
+				m.typing = false
+				m.channelsUI.input.Blur()
 			}
 
 		// Vim navigation
@@ -311,10 +342,29 @@ func (m *Model) handleTyping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.typing = false
 		m.chat.input.Blur()
 		m.dm.input.Blur()
+		if m.activeTab == tabChannels {
+			m.channelsUI.editing = false
+			m.channelsUI.creating = false
+			m.channelsUI.input.Blur()
+		}
 		return m, nil
 
+	case "tab":
+		// Cycle fields in channel editor
+		if m.activeTab == tabChannels && m.channelsUI.editing {
+			m.channelNextField()
+			return m, nil
+		}
+
+	case "g":
+		// Generate random PSK in channel editor
+		if m.activeTab == tabChannels && m.channelsUI.editing && m.channelsUI.field == fieldPSK {
+			psk := generatePSK()
+			m.channelsUI.input.SetValue(hex.EncodeToString(psk))
+			return m, nil
+		}
+
 	case "enter":
-		// Send message
 		switch m.activeTab {
 		case tabChat:
 			text := m.chat.input.Value()
@@ -330,6 +380,11 @@ func (m *Model) handleTyping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.dm.input.SetValue("")
 				m.dm.refreshMessages(m.db, m.myNodeNum)
 			}
+		case tabChannels:
+			if m.channelsUI.editing {
+				m.saveChannelEdit()
+				return m, nil
+			}
 		}
 		return m, nil
 	}
@@ -341,6 +396,8 @@ func (m *Model) handleTyping(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.chat.input, cmd = m.chat.input.Update(msg)
 	case tabDM:
 		m.dm.input, cmd = m.dm.input.Update(msg)
+	case tabChannels:
+		m.channelsUI.input, cmd = m.channelsUI.input.Update(msg)
 	}
 	return m, cmd
 }
@@ -414,8 +471,170 @@ func (m *Model) sendChunked(msgs []string, to uint32, channel uint32) {
 	for i, msg := range msgs {
 		m.sendMessage(msg, to, channel)
 		if i < len(msgs)-1 {
-			time.Sleep(2 * time.Second) // LoRa duty cycle spacing
+			time.Sleep(2 * time.Second)
 		}
+	}
+}
+
+func (m *Model) requestChannels() {
+	if m.myNodeNum == 0 {
+		return
+	}
+	go func() {
+		for i := uint32(0); i < 8; i++ {
+			data, err := proto.EncodeAdminGetChannel(m.myNodeNum, i)
+			if err == nil {
+				m.conn.Send(data)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+}
+
+func (m *Model) startChannelEdit() {
+	ch := m.channelsUI.channels[m.channelsUI.cursor]
+	m.channelsUI.editing = true
+	m.channelsUI.creating = false
+	m.channelsUI.editIdx = m.channelsUI.cursor
+	m.channelsUI.field = fieldName
+	m.channelsUI.input.SetValue(ch.name)
+	m.channelsUI.input.Focus()
+	m.typing = true
+}
+
+func (m *Model) startChannelCreate() {
+	// Find first disabled slot
+	idx := int32(-1)
+	for i := int32(1); i < 8; i++ {
+		found := false
+		for _, ch := range m.channelsUI.channels {
+			if ch.index == i && ch.role != pb.Channel_DISABLED {
+				found = true
+				break
+			}
+		}
+		if !found {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		m.channelsUI.message = "No available channel slots"
+		return
+	}
+
+	// Add a placeholder
+	m.channelsUI.channels = append(m.channelsUI.channels, channelInfo{
+		index: idx,
+		role:  pb.Channel_SECONDARY,
+		psk:   generatePSK(),
+	})
+	m.channelsUI.cursor = len(m.channelsUI.channels) - 1
+	m.channelsUI.editing = true
+	m.channelsUI.creating = true
+	m.channelsUI.editIdx = m.channelsUI.cursor
+	m.channelsUI.field = fieldName
+	m.channelsUI.input.SetValue("")
+	m.channelsUI.input.Focus()
+	m.typing = true
+}
+
+func (m *Model) channelNextField() {
+	ch := &m.channelsUI.channels[m.channelsUI.editIdx]
+
+	// Save current field value
+	switch m.channelsUI.field {
+	case fieldName:
+		ch.name = m.channelsUI.input.Value()
+		m.channelsUI.field = fieldPSK
+		m.channelsUI.input.SetValue(pskDisplayStr(ch.psk))
+	case fieldPSK:
+		// Parse PSK from input
+		val := m.channelsUI.input.Value()
+		if val == "" || val == "(none)" {
+			ch.psk = nil
+		} else if val == "default" {
+			ch.psk = []byte{1}
+		} else if decoded, err := hex.DecodeString(val); err == nil {
+			ch.psk = decoded
+		}
+		m.channelsUI.field = fieldRole
+		m.channelsUI.input.SetValue(ch.role.String())
+	case fieldRole:
+		val := strings.ToUpper(m.channelsUI.input.Value())
+		if strings.Contains(val, "SEC") {
+			ch.role = pb.Channel_SECONDARY
+		} else if strings.Contains(val, "PRI") {
+			ch.role = pb.Channel_PRIMARY
+		} else if strings.Contains(val, "DIS") {
+			ch.role = pb.Channel_DISABLED
+		}
+		m.channelsUI.field = fieldName
+		m.channelsUI.input.SetValue(ch.name)
+	}
+}
+
+func (m *Model) saveChannelEdit() {
+	ch := &m.channelsUI.channels[m.channelsUI.editIdx]
+
+	// Save current field
+	switch m.channelsUI.field {
+	case fieldName:
+		ch.name = m.channelsUI.input.Value()
+	case fieldPSK:
+		val := m.channelsUI.input.Value()
+		if val == "" || val == "(none)" {
+			ch.psk = nil
+		} else if val == "default" {
+			ch.psk = []byte{1}
+		} else if decoded, err := hex.DecodeString(val); err == nil {
+			ch.psk = decoded
+		}
+	case fieldRole:
+		val := strings.ToUpper(m.channelsUI.input.Value())
+		if strings.Contains(val, "SEC") {
+			ch.role = pb.Channel_SECONDARY
+		} else if strings.Contains(val, "PRI") {
+			ch.role = pb.Channel_PRIMARY
+		} else if strings.Contains(val, "DIS") {
+			ch.role = pb.Channel_DISABLED
+		}
+	}
+
+	// Send to device
+	data, err := buildSetChannel(m.myNodeNum, ch.index, ch.name, ch.psk, ch.role)
+	if err == nil {
+		m.conn.Send(data)
+		m.channelsUI.message = fmt.Sprintf("Channel %d updated", ch.index)
+	} else {
+		m.channelsUI.message = "Error: " + err.Error()
+	}
+
+	m.channelsUI.editing = false
+	m.channelsUI.creating = false
+	m.channelsUI.input.Blur()
+	m.typing = false
+
+	// Also update the local channel names cache
+	if int(ch.index) < len(m.channels) {
+		m.channels[ch.index] = ch.name
+	}
+}
+
+func (m *Model) disableChannel() {
+	if m.channelsUI.cursor >= len(m.channelsUI.channels) {
+		return
+	}
+	ch := m.channelsUI.channels[m.channelsUI.cursor]
+	if ch.role == pb.Channel_PRIMARY {
+		m.channelsUI.message = "Cannot disable primary channel"
+		return
+	}
+	data, err := buildSetChannel(m.myNodeNum, ch.index, "", nil, pb.Channel_DISABLED)
+	if err == nil {
+		m.conn.Send(data)
+		m.channelsUI.channels[m.channelsUI.cursor].role = pb.Channel_DISABLED
+		m.channelsUI.message = fmt.Sprintf("Channel %d disabled", ch.index)
 	}
 }
 
@@ -447,6 +666,17 @@ func (m *Model) moveCursor(delta int) {
 		}
 		if m.config.cursor > max {
 			m.config.cursor = max
+		}
+	case tabChannels:
+		if !m.channelsUI.editing {
+			m.channelsUI.cursor += delta
+			max := len(m.channelsUI.channels) - 1
+			if m.channelsUI.cursor < 0 {
+				m.channelsUI.cursor = 0
+			}
+			if m.channelsUI.cursor > max {
+				m.channelsUI.cursor = max
+			}
 		}
 	case tabDM:
 		if m.dm.mode == dmModeList {
@@ -523,6 +753,7 @@ func (m *Model) processPacket(pkt *proto.Packet) {
 		if int(ch.GetIndex()) < len(m.channels) && ch.GetSettings() != nil {
 			m.channels[ch.GetIndex()] = ch.GetSettings().GetName()
 		}
+		m.channelsUI.addChannel(ch)
 
 	case *pb.FromRadio_Config:
 		m.config.addConfig(v.Config)
@@ -680,6 +911,9 @@ func (m *Model) processPacket(pkt *proto.Packet) {
 			if mcfg := payload.GetGetModuleConfigResponse(); mcfg != nil {
 				m.config.addModuleConfig(mcfg)
 			}
+			if ch := payload.GetGetChannelResponse(); ch != nil {
+				m.channelsUI.addChannel(ch)
+			}
 		}
 
 		m.db.UpsertNode(nodeUpdate)
@@ -731,6 +965,8 @@ func (m Model) View() string {
 		content = m.dm.view(&m, contentHeight)
 	case tabConfig:
 		content = m.config.view(&m, contentHeight)
+	case tabChannels:
+		content = m.channelsUI.view(&m, contentHeight)
 	case tabBBS:
 		content = m.bbsTab.view(&m, contentHeight)
 	}

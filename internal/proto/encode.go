@@ -66,6 +66,60 @@ func EncodeAdminModuleConfigRequest(from uint32, configType pb.AdminMessage_Modu
 	return proto.Marshal(tr)
 }
 
+func EncodeAdminGetChannel(from uint32, channelIndex uint32) ([]byte, error) {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_GetChannelRequest{GetChannelRequest: channelIndex},
+	}
+	payload, err := proto.Marshal(admin)
+	if err != nil {
+		return nil, err
+	}
+	tr := &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From:    from,
+				To:      from,
+				WantAck: true,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum:      pb.PortNum_ADMIN_APP,
+						Payload:      payload,
+						WantResponse: true,
+					},
+				},
+			},
+		},
+	}
+	return proto.Marshal(tr)
+}
+
+func EncodeAdminSetChannel(from uint32, ch *pb.Channel) ([]byte, error) {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetChannel{SetChannel: ch},
+	}
+	payload, err := proto.Marshal(admin)
+	if err != nil {
+		return nil, err
+	}
+	tr := &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From:    from,
+				To:      from,
+				WantAck: true,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum:      pb.PortNum_ADMIN_APP,
+						Payload:      payload,
+						WantResponse: true,
+					},
+				},
+			},
+		},
+	}
+	return proto.Marshal(tr)
+}
+
 func EncodeTextMessage(from, to uint32, text string, channel uint32) ([]byte, error) {
 	tr := &pb.ToRadio{
 		PayloadVariant: &pb.ToRadio_Packet{
