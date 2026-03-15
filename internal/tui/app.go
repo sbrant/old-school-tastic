@@ -597,14 +597,7 @@ func (m *Model) channelNextField() {
 		m.channelsUI.input.SetValue(pskDisplayStr(ch.psk))
 	case fieldPSK:
 		// Parse PSK from input
-		val := m.channelsUI.input.Value()
-		if val == "" || val == "(none)" {
-			ch.psk = nil
-		} else if val == "default" {
-			ch.psk = []byte{1}
-		} else if decoded, err := hex.DecodeString(val); err == nil {
-			ch.psk = decoded
-		}
+		ch.psk = parsePSK(m.channelsUI.input.Value())
 		m.channelsUI.field = fieldRole
 		m.channelsUI.input.SetValue(ch.role.String())
 	case fieldRole:
@@ -629,14 +622,7 @@ func (m *Model) saveChannelEdit() {
 	case fieldName:
 		ch.name = m.channelsUI.input.Value()
 	case fieldPSK:
-		val := m.channelsUI.input.Value()
-		if val == "" || val == "(none)" {
-			ch.psk = nil
-		} else if val == "default" {
-			ch.psk = []byte{1}
-		} else if decoded, err := hex.DecodeString(val); err == nil {
-			ch.psk = decoded
-		}
+		ch.psk = parsePSK(m.channelsUI.input.Value())
 	case fieldRole:
 		val := strings.ToUpper(m.channelsUI.input.Value())
 		if strings.Contains(val, "SEC") {

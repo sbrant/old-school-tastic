@@ -47,8 +47,8 @@ type channelsTab struct {
 
 func newChannelsTab() *channelsTab {
 	ti := textinput.New()
-	ti.CharLimit = 64
-	ti.Width = 40
+	ti.CharLimit = 128
+	ti.Width = 64
 	ti.Prompt = "» "
 	ti.PromptStyle = lipgloss.NewStyle().Foreground(ColorGreen)
 	ti.TextStyle = lipgloss.NewStyle().Foreground(ColorWhite)
@@ -221,6 +221,29 @@ func (t *channelsTab) viewEdit(m *Model, height int) string {
 	lines = append(lines, lipgloss.NewStyle().Foreground(ColorDim).Render("  Tab:next field  Enter:save  g:generate random PSK  Esc:cancel"))
 
 	return strings.Join(lines, "\n")
+}
+
+// parsePSK parses a PSK from user input, handling various formats
+func parsePSK(val string) []byte {
+	val = strings.TrimSpace(val)
+	if val == "" || val == "(none)" {
+		return nil
+	}
+	if val == "default" {
+		return []byte{1}
+	}
+	// Strip 0x prefix
+	val = strings.TrimPrefix(val, "0x")
+	val = strings.TrimPrefix(val, "0X")
+	// Remove spaces, colons, dashes (common in copied hex)
+	val = strings.ReplaceAll(val, " ", "")
+	val = strings.ReplaceAll(val, ":", "")
+	val = strings.ReplaceAll(val, "-", "")
+
+	if decoded, err := hex.DecodeString(val); err == nil && len(decoded) > 0 {
+		return decoded
+	}
+	return nil
 }
 
 func pskDisplayStr(psk []byte) string {
